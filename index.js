@@ -1,11 +1,11 @@
-var usb = require('usb');
+var usb = require('usb')
 
-var UVC_SET_CUR = 0x01;
-var UVC_GET_CUR = 0x81;
-var UVC_GET_MIN	= 0x82;
-var UVC_GET_MAX	= 0x83;
-var UVC_INPUT_TERMINAL_ID = 0x01;
-var UVC_PROCESSING_UNIT_ID = 0x03;
+var UVC_SET_CUR = 0x01
+var UVC_GET_CUR = 0x81
+var UVC_GET_MIN = 0x82
+var UVC_GET_MAX = 0x83
+var UVC_INPUT_TERMINAL_ID = 0x01
+var UVC_PROCESSING_UNIT_ID = 0x03
 
 // See USB Device Class Definition for Video Devices Revision 1.1
 // http://www.usb.org/developers/docs/devclass_docs/
@@ -100,200 +100,190 @@ var Controls = {
     selector: 0x0B,
     size: 1
   }
-};
-
-function UVCControl(options = {}) {
-  this.options = options;
-  this.init();
 }
-
-UVCControl.EXPOSURE_MANUAL = 0b00000001
-UVCControl.EXPOSURE_AUTO = 0b00000010
-UVCControl.EXPOSURE_PRIORITY_SHUTTER = 0b00000100
-UVCControl.EXPOSURE_PRIORITY_APERTURE = 0b00001000
-
-module.exports = UVCControl;
-
-/**
- * Get list of recognized controls
- * @return {Array} controls
- */
-UVCControl.controls = Object.keys( Controls );
-
-UVCControl.prototype.init = function() {
-
-  if(this.options.vid && this.options.pid && this.options.deviceAddress){
-
-    // find cam with vid / pid / deviceAddress
-    this.device = usb.getDeviceList().filter(function(device){
-      return isWebcam(device) &&
-              device.deviceDescriptor.idVendor === this.options.vid && 
-              device.deviceDescriptor.idProduct === this.options.pid &&
-              device.deviceAddress === this.options.deviceAddress;
-    }.bind(this))[0];
-
-  }else if(this.options.vid && this.options.pid){
-    
-    // find a camera that matches the vid / pid
-    this.device = usb.getDeviceList().filter(function(device){
-      return isWebcam(device) &&
-              device.deviceDescriptor.idVendor === this.options.vid && 
-              device.deviceDescriptor.idProduct === this.options.pid;
-    }.bind(this))[0];
-
-  }else if(this.options.vid){
-
-    // find a camera that matches the vendor id
-    this.device = usb.getDeviceList().filter(function(device){
-      return isWebcam(device) &&
-              device.deviceDescriptor.idVendor === this.options.vid;
-    }.bind(this))[0];
-
-  }else{
-
-    // no options... use the first camera in the device list
-    this.device = usb.getDeviceList().filter(function(device){
-      return isWebcam(device);
-    })[0];
+module.exports = class UVCControl {
+  constructor (options = {}) {
+    this.options = options
+    this.init()
   }
 
-  if (this.device) {
-    this.device.open();
-    this.interfaceNumber = detectVideoControlInterface( this.device );
-  }
-}
-
-UVCControl.prototype.getUnitOverride = function(unit) {
-  if (unit == UVC_INPUT_TERMINAL_ID && this.options.inputTerminalId) {
-    return this.options.inputTerminalId;
-  }
-  if (unit == UVC_PROCESSING_UNIT_ID && this.options.processingUnitId) {
-    return this.options.processingUnitId
-  }
-  return unit;
-}
-
-UVCControl.prototype.getControlParams = function(id, callback) {
-  if (!this.device) {
-    return callback(new Error('USB device not found with vid 0x' + this.options.vid.toString(16) + ', pid 0x' + this.options.pid.toString(16) ));
-  }
-  if (this.interfaceNumber === undefined) {
-    return callback(new Error('UVC compliant device not found.'));
-  }
-  var control = Controls[id];
-  if (!control) {
-    return callback( new Error('UVC Control identifier not recognized: ' + id) );
+  /**
+   * Get list of recognized controls
+   * @return {Array} controls
+   */
+  static get controls () {
+    return Object.keys(Controls)
   }
 
-  var unit = this.getUnitOverride(control.unit);
-  var params = {
-    wValue: (control.selector << 8) | 0x00,
-    wIndex: (unit << 8) | this.interfaceNumber,
-    wLength: control.size
-  };
-  callback(null, params);
-};
+  /**
+   * Discover uvc devices
+   */
+  static discover () {
+    return new Promise((resolve, reject) => {
+      var promises = usb.getDeviceList().map(UVCControl.validate)
+      Promise.all(promises).then(results => {
+        resolve(results.filter(w => w)) // rm nulls
+      })
+    })
+  }
 
-/**
- * Close the device
- */
-UVCControl.prototype.close = function() {
-  this.device.close();
+  /**
+   * Check if device is a uvc device
+   * @param  {object} device
+   */
+  static validate (device) {
+    return new Promise((resolve, reject) => {
+      if (device.deviceDescriptor.iProduct) {
+        device.open()
+        // http://www.usb.org/developers/defined_class/#BaseClass10h
+        if (isWebcam(device)) {
+          device.getStringDescriptor(device.deviceDescriptor.iProduct, function (error, deviceName) {
+            if (error) {
+              return resolve(false)
+            }
+            device.close()
+            device.name = deviceName
+            resolve(device)
+          })
+        } else resolve(false)
+      } else resolve(false)
+    })
+  }
+
+  init () {
+    if (this.options.vid && this.options.pid && this.options.deviceAddress) {
+      // find cam with vid / pid / deviceAddress
+      this.device = usb.getDeviceList().filter(device => {
+        return isWebcam(device) &&
+                device.deviceDescriptor.idVendor === this.options.vid &&
+                device.deviceDescriptor.idProduct === this.options.pid &&
+                device.deviceAddress === this.options.deviceAddress
+      })[0]
+    } else if (this.options.vid && this.options.pid) {
+      // find a camera that matches the vid / pid
+      this.device = usb.getDeviceList().filter(device => {
+        return isWebcam(device) &&
+                device.deviceDescriptor.idVendor === this.options.vid &&
+                device.deviceDescriptor.idProduct === this.options.pid
+      })[0]
+    } else if (this.options.vid) {
+      // find a camera that matches the vendor id
+      this.device = usb.getDeviceList().filter(device => {
+        return isWebcam(device) &&
+                device.deviceDescriptor.idVendor === this.options.vid
+      })[0]
+    } else {
+      // no options... use the first camera in the device list
+      this.device = usb.getDeviceList().filter(function (device) {
+        return isWebcam(device)
+      })[0]
+    }
+
+    if (this.device) {
+      this.device.open()
+      this.interfaceNumber = detectVideoControlInterface(this.device)
+    }
+  }
+
+  getUnitOverride (unit) {
+    if (unit == UVC_INPUT_TERMINAL_ID && this.options.inputTerminalId) {
+      return this.options.inputTerminalId
+    }
+    if (unit == UVC_PROCESSING_UNIT_ID && this.options.processingUnitId) {
+      return this.options.processingUnitId
+    }
+    return unit
+  }
+
+  getControlParams (id, callback) {
+    if (!this.device) {
+      return callback(new Error('USB device not found with vid 0x' + this.options.vid.toString(16) + ', pid 0x' + this.options.pid.toString(16)))
+    }
+    if (this.interfaceNumber === undefined) {
+      return callback(new Error('UVC compliant device not found.'))
+    }
+    var control = Controls[id]
+    if (!control) {
+      return callback(new Error('UVC Control identifier not recognized: ' + id))
+    }
+
+    var unit = this.getUnitOverride(control.unit)
+    var params = {
+      wValue: (control.selector << 8) | 0x00,
+      wIndex: (unit << 8) | this.interfaceNumber,
+      wLength: control.size
+    }
+    callback(null, params)
+  }
+
+  /**
+   * Close the device
+   */
+  close () {
+    this.device.close()
+  }
+
+  /**
+   * Get the value of a control
+   * @param  {string} controlName
+   * @param  {Function} callback(error,value)
+   */
+  get (id, callback) {
+    this.getControlParams(id, (error, params) => {
+      if (error) return callback(error)
+      this.device.controlTransfer(0b10100001, UVC_GET_CUR, params.wValue, params.wIndex, params.wLength, function (error, buffer) {
+        if (error) return callback(error)
+        callback(null, buffer.readIntLE(0, params.wLength))
+      })
+    })
+  }
+
+  /**
+   * Set the value of a control
+   * @param  {string}   controlId
+   * @param  {number}   value
+   * @param  {Function} callback(error)
+   */
+  set (id, value, callback) {
+    this.getControlParams(id, (error, params) => {
+      if (error) return callback(error)
+      var data = Buffer.from(params.wLength)
+      data.writeIntLE(value, 0, params.wLength)
+      this.device.controlTransfer(0b00100001, UVC_SET_CUR, params.wValue, params.wIndex, data, callback)
+    })
+  }
+
+  /**
+   * Set the raw value of a control
+   * @param  {string}   controlId
+   * @param  {buffer}   value
+   * @param  {Function} callback(error)
+   */
+  setRaw (id, value, callback) {
+    this.getControlParams(id, (error, params) => {
+      if (error) return callback(error)
+      this.device.controlTransfer(0b00100001, UVC_SET_CUR, params.wValue, params.wIndex, value, callback)
+    })
+  }
+
+  /**
+   * Get the min and max range of a control
+   * @param  {string} controlName
+   * @param  {Function} callback(error,minMax)
+   */
+  range (id, callback) {
+    this.getControlParams(id, (error, params) => {
+      if (error) return callback(error)
+      this.device.controlTransfer(0b10100001, UVC_GET_MIN, params.wValue, params.wIndex, params.wLength, (error, min) => {
+        if (error) return callback(error)
+        this.device.controlTransfer(0b10100001, UVC_GET_MAX, params.wValue, params.wIndex, params.wLength, function (error, max) {
+          if (error) return callback(error)
+          callback(null, [min.readIntLE(0, params.wLength), max.readIntLE(0, params.wLength)])
+        })
+      })
+    })
+  }
 }
-
-/**
- * Get the value of a control
- * @param  {string} controlName
- * @param  {Function} callback(error,value)
- */
-UVCControl.prototype.get = function(id, callback) {
-  this.getControlParams(id, function(error, params) {
-    if (error) return callback(error);
-    this.device.controlTransfer(0b10100001, UVC_GET_CUR, params.wValue, params.wIndex, params.wLength, function(error,buffer) {
-      if (error) return callback(error);
-      callback(null, buffer.readIntLE(0,params.wLength));
-    });
-  }.bind(this));
-}
-
-/**
- * Set the value of a control
- * @param  {string}   controlId
- * @param  {number}   value
- * @param  {Function} callback(error)
- */
-UVCControl.prototype.set = function(id, value, callback) {
-  this.getControlParams(id, function(error, params) {
-    if (error) return callback(error);
-    var data = new Buffer(params.wLength);
-    data.writeIntLE(value, 0, params.wLength);
-    this.device.controlTransfer(0b00100001, UVC_SET_CUR, params.wValue, params.wIndex, data, callback);
-  }.bind(this));
-}
-
-/**
- * Set the raw value of a control
- * @param  {string}   controlId
- * @param  {buffer}   value
- * @param  {Function} callback(error)
- */
-UVCControl.prototype.setRaw = function(id, value, callback) {
-  this.getControlParams(id, function(error, params) {
-    if (error) return callback(error);
-    this.device.controlTransfer(0b00100001, UVC_SET_CUR, params.wValue, params.wIndex, value, callback);
-  }.bind(this));
-}
-
-/**
- * Get the min and max range of a control
- * @param  {string} controlName
- * @param  {Function} callback(error,minMax)
- */
-UVCControl.prototype.range = function(id, callback) {
-  this.getControlParams(id, function(error, params) {
-    if (error) return callback(error);
-    this.device.controlTransfer(0b10100001, UVC_GET_MIN, params.wValue, params.wIndex, params.wLength, function(error,min) {
-      if (error) return callback(error);
-      this.device.controlTransfer(0b10100001, UVC_GET_MAX, params.wValue, params.wIndex, params.wLength, function(error,max) {
-        if (error) return callback(error);
-        callback(null,[min.readIntLE(0,params.wLength), max.readIntLE(0,params.wLength)]);
-      }.bind(this));
-    }.bind(this));
-  }.bind(this));
-}
-
-/**
- * Discover uvc devices
- */
-UVCControl.discover = function(){ return new Promise((resolve, reject) => {
-  var promises = usb.getDeviceList().map(UVCControl.validate);
-  Promise.all(promises).then(results => {
-    resolve(results.filter(w => w)); // rm nulls
-  });
-})}
-
-
-/**
- * Check if device is a uvc device
- * @param  {object} device
- */
-UVCControl.validate = device => { return new Promise((resolve, reject) => {
-
-  if (device.deviceDescriptor.iProduct) {
-    device.open();
-    
-    // http://www.usb.org/developers/defined_class/#BaseClass10h
-    if(isWebcam(device)){
-      device.getStringDescriptor(device.deviceDescriptor.iProduct, function(error, deviceName){
-        if(error) throw error;
-        device.close();
-        device.name = deviceName;
-        resolve(device);
-      });
-    } else resolve(false);
-  } else resolve(false);
-})}
-
 
 /**
  * Given a USB device, iterate through all of the exposed interfaces looking for
@@ -302,13 +292,13 @@ UVCControl.validate = device => { return new Promise((resolve, reject) => {
  * @param  {object} device
  * @return {object} interface
  */
-function detectVideoControlInterface(device) {
-  var interfaces = device.interfaces;
-  for (var i=0;i<interfaces.length;i++) {
-    if ( interfaces[i].descriptor.bInterfaceClass == 0x0e &&
+function detectVideoControlInterface (device) {
+  var interfaces = device.interfaces
+  for (var i = 0; i < interfaces.length; i++) {
+    if (interfaces[i].descriptor.bInterfaceClass == 0x0e &&
       interfaces[i].descriptor.bInterfaceSubClass == 0x01
     ) {
-      return i;
+      return i
     }
   }
 }
@@ -318,8 +308,8 @@ function detectVideoControlInterface(device) {
  * @param  {object} device
  * @return {Boolean}
  */
-function isWebcam(device){
+function isWebcam (device) {
   // http://www.usb.org/developers/defined_class/#BaseClass10h
-  return device.deviceDescriptor.bDeviceClass === 239 && 
-          device.deviceDescriptor.bDeviceSubClass === 2;
+  return device.deviceDescriptor.bDeviceClass === 239 &&
+          device.deviceDescriptor.bDeviceSubClass === 2
 }
