@@ -247,7 +247,7 @@ module.exports = class UVCControl {
   set (id, value, callback) {
     this.getControlParams(id, (error, params) => {
       if (error) return callback(error)
-      var data = Buffer.from(params.wLength)
+      var data = Buffer.alloc(params.wLength)
       data.writeIntLE(value, 0, params.wLength)
       this.device.controlTransfer(0b00100001, UVC_SET_CUR, params.wValue, params.wIndex, data, callback)
     })
